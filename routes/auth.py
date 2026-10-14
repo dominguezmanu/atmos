@@ -44,6 +44,10 @@ class UsuarioLogin(BaseModel):
     username: str
     password: str
 
+class UsuarioActualizar(BaseModel):
+    nombre: str = Field(main_length=1, max_length=100)
+    email: EmailStr
+    telefono: str | None = None
 
 # GENERAR TOKEN
 
@@ -247,6 +251,95 @@ def obtener_usuario(
             "telefono": usuario[4],
             "cambio_password": usuario[5]
         }
+
+    finally:
+        cursor.close()
+        conexion.close()
+# ACTUALIZAR PERFIL DEL USUARIO
+
+@router.patch("/perfil")
+def actualizar_perfil(
+    datos: UsuarioActualizar,
+    credenciales: HTTPAuthorizationCredentials | None = Depends(security)
+):
+
+    if credenciales is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Token requerido"
+        )
+
+    try:
+        token = jwt.decode(
+            credenciales.credentials,
+            SECRET_KEY,
+            algorithms=[ALGORITHM]
+        )
+
+        id_usuario = int(token["sub"])
+
+    except (jwt.InvalidTokenError, ValueError, KeyError):
+        raise HTTPException(
+            status_code=401,
+            detail="Token inválido o expirado"
+        )
+
+    conexion = get_connection()
+    cursor = conexion.cursor()
+
+    try:
+        cursor.execute(
+            """
+            UPDATE usuarios
+            SET nombre = %s,
+                email = %s,
+                telefono = %s
+            WHERE id_usuario = %s
+            RETURNING
+                id_usuario,
+                username,
+                nombre,
+                email,
+                telefono;
+            """,
+            (
+                datos.nombre.strip(),
+                str(datos.email).lower(),
+                datos.telefono,
+                id_usuario
+            )
+        )
+
+        usuario = cursor.fetchone()
+
+        if usuario is None:
+            conexion.rollback()
+
+            raise HTTPException(
+                status_code=404,
+                detail="Usuario no encontrado"
+            )
+
+        conexion.commit()
+
+        return {
+            "mensaje": "Perfil actualizado correctamente",
+            "usuario": {
+                "id_usuario": usuario[0],
+                "username": usuario[1],
+                "nombre": usuario[2],
+                "email": usuario[3],
+                "telefono": usuario[4]
+            }
+        }
+
+    except IntegrityError:
+        conexion.rollback()
+
+        raise HTTPException(
+            status_code=409,
+            detail="El correo electrónico ya está registrado"
+        )
 
     finally:
         cursor.close()
