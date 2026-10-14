@@ -3,7 +3,8 @@ import jwt
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field
 from pwdlib import PasswordHash
 from psycopg2 import IntegrityError
@@ -23,6 +24,7 @@ password_hash = PasswordHash.recommended()
 
 SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 ALGORITHM = "HS256"
+security = HTTPBearer(auto_error=False);
 
 if not SECRET_KEY:
     raise RuntimeError("Falta configurar JWT_SECRET_KEY")
@@ -176,6 +178,74 @@ def iniciar_sesion(usuario: UsuarioLogin):
                 "nombre": resultado[2],
                 "email": resultado[3]
             }
+        }
+
+    finally:
+        cursor.close()
+        conexion.close()
+
+# OBTENER USUARIO AUTENTICADO
+
+@router.get("/me")
+def obtener_usuario(
+    credenciales: HTTPAuthorizationCredentials | None = Depends(security)
+):
+
+    if credenciales is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Token requerido"
+        )
+
+    try:
+        datos = jwt.decode(
+            credenciales.credentials,
+            SECRET_KEY,
+            algorithms=[ALGORITHM]
+        )
+
+        id_usuario = int(datos["sub"])
+
+    except (jwt.InvalidTokenError, ValueError, KeyError):
+        raise HTTPException(
+            status_code=401,
+            detail="Token inválido o expirado"
+        )
+
+    conexion = get_connection()
+    cursor = conexion.cursor()
+
+    try:
+        cursor.execute(
+            """
+            SELECT
+                id_usuario,
+                username,
+                nombre,
+                email,
+                telefono,
+                cambio_password
+            FROM usuarios
+            WHERE id_usuario = %s;
+            """,
+            (id_usuario,)
+        )
+
+        usuario = cursor.fetchone()
+
+        if usuario is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Usuario no encontrado"
+            )
+
+        return {
+            "id_usuario": usuario[0],
+            "username": usuario[1],
+            "nombre": usuario[2],
+            "email": usuario[3],
+            "telefono": usuario[4],
+            "cambio_password": usuario[5]
         }
 
     finally:
