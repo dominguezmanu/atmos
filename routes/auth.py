@@ -49,6 +49,10 @@ class UsuarioActualizar(BaseModel):
     email: EmailStr
     telefono: str | None = None
 
+class CambioPassword(BaseModel):
+    password_actual: str
+    password_nueva: str = Field(min_length=8, max_length=128)
+    confirmar_password: str
 # GENERAR TOKEN
 
 def crear_token(id_usuario):
@@ -340,6 +344,111 @@ def actualizar_perfil(
             status_code=409,
             detail="El correo electrónico ya está registrado"
         )
+
+    finally:
+        cursor.close()
+        conexion.close()
+
+# CAMBIAR CONTRASEÑA
+
+@router.post("/cambiar-password")
+def cambiar_password(
+    datos: CambioPassword,
+    credenciales: HTTPAuthorizationCredentials | None = Depends(security)
+):
+
+    if credenciales is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Token requerido"
+        )
+
+    # Validar token JWT
+    try:
+        token = jwt.decode(
+            credenciales.credentials,
+            SECRET_KEY,
+            algorithms=[ALGORITHM]
+        )
+
+        id_usuario = int(token["sub"])
+
+    except (jwt.InvalidTokenError, ValueError, KeyError):
+        raise HTTPException(
+            status_code=401,
+            detail="Token inválido o expirado"
+        )
+
+    # Comprobar confirmación
+    if datos.password_nueva != datos.confirmar_password:
+        raise HTTPException(
+            status_code=400,
+            detail="Las contraseñas nuevas no coinciden"
+        )
+
+    if datos.password_actual == datos.password_nueva:
+        raise HTTPException(
+            status_code=400,
+            detail="La contraseña nueva debe ser diferente a la actual"
+        )
+
+    conexion = get_connection()
+    cursor = conexion.cursor()
+
+    try:
+
+        # Buscar contraseña actual
+        cursor.execute(
+            """
+            SELECT password_hash
+            FROM usuarios
+            WHERE id_usuario = %s;
+            """,
+            (id_usuario,)
+        )
+
+        usuario = cursor.fetchone()
+
+        if usuario is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Usuario no encontrado"
+            )
+
+        # Verificar contraseña actual
+        if not password_hash.verify(
+            datos.password_actual,
+            usuario[0]
+        ):
+            raise HTTPException(
+                status_code=401,
+                detail="La contraseña actual es incorrecta"
+            )
+
+        # Proteger nueva contraseña
+        nueva_password_hash = password_hash.hash(
+            datos.password_nueva
+        )
+
+        # Actualizar contraseña
+        cursor.execute(
+            """
+            UPDATE usuarios
+            SET password_hash = %s,
+                cambio_password = FALSE
+            WHERE id_usuario = %s;
+            """,
+            (
+                nueva_password_hash,
+                id_usuario
+            )
+        )
+
+        conexion.commit()
+
+        return {
+            "mensaje": "Contraseña actualizada correctamente"
+        }
 
     finally:
         cursor.close()
