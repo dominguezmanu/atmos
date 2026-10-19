@@ -184,20 +184,19 @@ def iniciar_sesion(usuario: UsuarioLogin):
         # Verificar expiración de contraseña temporal
 
         if resultado[5] is True:
-
             expiracion = resultado[6]
 
-        if (
-            expiracion is not None
-            and datetime.now(timezone.utc) >= expiracion
-        ):
-            raise HTTPException(
-                status_code=401,
-                detail=(
-                    "La contraseña temporal ha expirado. "
-                    "Solicita una nueva."
+            if expiracion is None:
+                raise HTTPException(
+                    status_code=401,
+                    detail="Solicita una nueva contraseña temporal"
                 )
-            )
+
+            if datetime.now(timezone.utc) >= expiracion:
+                raise HTTPException(
+                    status_code=401,
+                    detail = "la contraseña temporal ha expirado"
+                )
 
         token = crear_token(resultado[0])
 
