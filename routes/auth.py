@@ -1,5 +1,10 @@
 import os
 import jwt
+import secrets
+import string
+
+from services.email_service import enviar_correo
+
 
 from datetime import datetime, timedelta, timezone
 
@@ -53,6 +58,9 @@ class CambioPassword(BaseModel):
     password_actual: str
     password_nueva: str = Field(min_length=8, max_length=128)
     confirmar_password: str
+
+class RecuperarPassword(BaseModel):
+    email: EmailStr
 # GENERAR TOKEN
 
 def crear_token(id_usuario):
@@ -147,7 +155,8 @@ def iniciar_sesion(usuario: UsuarioLogin):
                 nombre,
                 email,
                 password_hash,
-                cambio_password
+                cambio_password,
+                password_temporal_expira
             FROM usuarios
             WHERE username = %s;
             """,
@@ -171,6 +180,23 @@ def iniciar_sesion(usuario: UsuarioLogin):
             raise HTTPException(
                 status_code=401,
                 detail="Usuario o contraseña incorrectos"
+            )
+        # Verificar expiración de contraseña temporal
+
+        if resultado[5] is True:
+
+            expiracion = resultado[6]
+
+        if (
+            expiracion is not None
+            and datetime.now(timezone.utc) >= expiracion
+        ):
+            raise HTTPException(
+                status_code=401,
+                detail=(
+                    "La contraseña temporal ha expirado. "
+                    "Solicita una nueva."
+                )
             )
 
         token = crear_token(resultado[0])
@@ -435,7 +461,8 @@ def cambiar_password(
             """
             UPDATE usuarios
             SET password_hash = %s,
-                cambio_password = FALSE
+                cambio_password = FALSE,
+                password_temporal_expira = NULL
             WHERE id_usuario = %s;
             """,
             (
@@ -449,6 +476,139 @@ def cambiar_password(
         return {
             "mensaje": "Contraseña actualizada correctamente"
         }
+
+    finally:
+        cursor.close()
+        conexion.close()
+# RECUPERAR CONTRASEÑA
+
+@router.post("/recuperar-password")
+def recuperar_password(datos: RecuperarPassword):
+
+    mensaje = {
+        "mensaje": (
+            "Si el correo está registrado, "
+            "recibirás instrucciones de recuperación."
+        )
+    }
+
+    conexion = get_connection()
+    cursor = conexion.cursor()
+
+    try:
+        cursor.execute(
+            """
+            SELECT
+                id_usuario,
+                nombre,
+                email,
+                ultima_recuperacion
+            FROM usuarios
+            WHERE LOWER(email) = %s
+            FOR UPDATE;
+            """,
+            (str(datos.email).lower(),)
+        )
+
+        usuario = cursor.fetchone()
+
+        # No revelar si el correo existe
+        if usuario is None:
+            return mensaje
+
+        id_usuario = usuario[0]
+        nombre = usuario[1]
+        email = usuario[2]
+        ultima_recuperacion = usuario[3]
+
+        ahora = datetime.now(timezone.utc)
+
+        # Esperar al menos 60 segundos entre solicitudes
+        if ultima_recuperacion is not None:
+            diferencia = ahora - ultima_recuperacion
+
+            if diferencia < timedelta(seconds=60):
+                return mensaje
+
+        # Generar contraseña temporal segura
+        caracteres = (
+            string.ascii_letters +
+            string.digits +
+            "!@#$%"
+        )
+
+        password_temporal = "".join(
+            secrets.choice(caracteres)
+            for _ in range(14)
+        )
+
+        expiracion = ahora + timedelta(minutes=15)
+
+        # Preparar correo
+        asunto = "Atmos - Recuperación de contraseña"
+
+        contenido = f"""
+            Hola, {nombre}.
+
+            Recibimos una solicitud para recuperar tu cuenta de Atmos.
+
+            Tu contraseña temporal es:
+
+            {password_temporal}
+
+            Esta contraseña vencerá en 15 minutos.
+
+            Cuando inicies sesión, deberás establecer una nueva contraseña.
+
+            Si no solicitaste este cambio, contacta al administrador.
+
+            Equipo Atmos
+            """
+
+        # Solicitar envío mediante Brevo
+        enviado = enviar_correo(
+            destinatario=email,
+            asunto=asunto,
+            mensaje=contenido
+        )
+
+        if not enviado:
+            conexion.rollback()
+            return mensaje
+
+        # Proteger contraseña temporal
+        hash_temporal = password_hash.hash(
+            password_temporal
+        )
+
+        # Actualizar usuario
+        cursor.execute(
+            """
+            UPDATE usuarios
+            SET password_hash = %s,
+                cambio_password = TRUE,
+                password_temporal_expira = %s,
+                ultima_recuperacion = %s
+            WHERE id_usuario = %s;
+            """,
+            (
+                hash_temporal,
+                expiracion,
+                ahora,
+                id_usuario
+            )
+        )
+
+        conexion.commit()
+
+        return mensaje
+
+    except Exception:
+        conexion.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudo procesar la solicitud"
+        )
 
     finally:
         cursor.close()
