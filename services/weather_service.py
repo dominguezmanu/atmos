@@ -9,7 +9,11 @@ WEATHER_URL = (
 )
 
 
-def obtener_pronostico(latitud: float, longitud: float):
+def obtener_pronostico(
+    latitud: float,
+    longitud: float,
+    horas: int = 24
+):
 
     api_key = os.getenv("GOOGLE_WEATHER_API_KEY")
 
@@ -19,26 +23,90 @@ def obtener_pronostico(latitud: float, longitud: float):
             detail="Weather API no está configurada"
         )
 
+    if not 1 <= horas <= 240:
+        raise HTTPException(
+            status_code=400,
+            detail="Las horas deben estar entre 1 y 240"
+        )
+
     parametros = {
         "key": api_key,
         "location.latitude": latitud,
         "location.longitude": longitud,
-        "hours": 24,
+        "hours": horas,
         "pageSize": 24,
         "unitsSystem": "METRIC",
         "languageCode": "es"
     }
 
+    pronosticos = []
+    pagina = None
+
     try:
-        respuesta = requests.get(
-            WEATHER_URL,
-            params=parametros,
-            timeout=20
-        )
+        while len(pronosticos) < horas:
 
-        respuesta.raise_for_status()
+            if pagina:
+                parametros["pageToken"] = pagina
 
-        datos = respuesta.json()
+            respuesta = requests.get(
+                WEATHER_URL,
+                params=parametros,
+                timeout=20
+            )
+
+            respuesta.raise_for_status()
+
+            datos = respuesta.json()
+
+            for hora in datos.get("forecastHours", []):
+
+                temperatura = hora.get("temperature", {})
+
+                precipitacion = hora.get(
+                    "precipitation", {}
+                )
+
+                probabilidad = precipitacion.get(
+                    "probability", {}
+                )
+
+                viento = hora.get("wind", {})
+                velocidad = viento.get("speed", {})
+
+                condicion = hora.get(
+                    "weatherCondition", {}
+                )
+
+                descripcion = condicion.get(
+                    "description", {}
+                )
+
+                pronosticos.append({
+                    "fecha": hora.get(
+                        "interval", {}
+                    ).get("startTime"),
+
+                    "temperatura": temperatura.get(
+                        "degrees"
+                    ),
+
+                    "probabilidad_lluvia":
+                        probabilidad.get("percent"),
+
+                    "velocidad_viento":
+                        velocidad.get("value"),
+
+                    "descripcion":
+                        descripcion.get("text"),
+
+                    "condicion":
+                        condicion.get("type")
+                })
+
+            pagina = datos.get("nextPageToken")
+
+            if not pagina:
+                break
 
     except requests.exceptions.RequestException:
         raise HTTPException(
@@ -46,32 +114,10 @@ def obtener_pronostico(latitud: float, longitud: float):
             detail="No se pudo consultar Google Weather API"
         )
 
-    pronosticos = []
-
-    for hora in datos.get("forecastHours", []):
-
-        temperatura = hora.get("temperature", {})
-
-        precipitacion = hora.get("precipitation", {})
-        probabilidad = precipitacion.get("probability", {})
-
-        viento = hora.get("wind", {})
-        velocidad = viento.get("speed", {})
-
-        condicion = hora.get("weatherCondition", {})
-        descripcion = condicion.get("description", {})
-
-        pronosticos.append({
-            "fecha": hora.get("interval", {}).get("startTime"),
-            "temperatura": temperatura.get("degrees"),
-            "probabilidad_lluvia": probabilidad.get("percent"),
-            "velocidad_viento": velocidad.get("value"),
-            "descripcion": descripcion.get("text"),
-            "condicion": condicion.get("type")
-        })
-
     return {
         "latitud": latitud,
         "longitud": longitud,
-        "pronosticos": pronosticos
+        "horas_solicitadas": horas,
+        "total_pronosticos": len(pronosticos),
+        "pronosticos": pronosticos[:horas]
     }

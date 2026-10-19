@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from psycopg2.extras import RealDictCursor
 
 from database import get_connection
 from routes.ubicaciones import obtener_id_usuario
 from services.weather_service import obtener_pronostico
+
 
 
 router = APIRouter(
@@ -15,6 +16,7 @@ router = APIRouter(
 @router.get("/ubicacion/{id_ubicacion}")
 def consultar_clima(
     id_ubicacion: int,
+    horas: int = Query(default=24, ge=1, le=240),
     id_usuario: int = Depends(obtener_id_usuario)
 ):
 
@@ -53,7 +55,8 @@ def consultar_clima(
 
     resultado = obtener_pronostico(
         float(ubicacion["latitud"]),
-        float(ubicacion["longitud"])
+        float(ubicacion["longitud"]),
+        horas
     )
 
     return {
