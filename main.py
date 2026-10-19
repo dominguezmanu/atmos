@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from database import get_connection
 from routes.auth import router as auth_router
 from routes.ubicaciones import router as ubicaciones_router
+from routes.actividades import router as actividades_router
 
 
 app = FastAPI(
@@ -16,6 +17,9 @@ app = FastAPI(
 app.include_router(auth_router)
 #rutas de ubicacion
 app.include_router(ubicaciones_router)
+#rutas de actividades
+app.include_router(actividades_router)
+
 
 @app.get("/")
 def inicio():
