@@ -4,7 +4,7 @@ from database import get_connection
 from routes.auth import router as auth_router
 from routes.ubicaciones import router as ubicaciones_router
 from routes.actividades import router as actividades_router
-
+from routes.clima import router as clima_router
 
 app = FastAPI(
     title="Atmos API",
@@ -19,7 +19,8 @@ app.include_router(auth_router)
 app.include_router(ubicaciones_router)
 #rutas de actividades
 app.include_router(actividades_router)
-
+#ruta para clima
+app.include_router(clima_router)
 
 @app.get("/")
 def inicio():
