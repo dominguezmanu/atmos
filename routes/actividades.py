@@ -240,3 +240,204 @@ def listar_actividades(
     finally:
         cursor.close()
         conexion.close()
+
+# EDITAR ACTIVIDAD
+
+@router.put("/{id_actividad}")
+def editar_actividad(
+    id_actividad: int,
+    datos: ActividadDatos,
+    id_usuario: int = Depends(obtener_id_usuario)
+):
+    conexion = get_connection()
+    cursor = conexion.cursor()
+
+    try:
+        # Verificar que la actividad pertenezca al usuario
+        cursor.execute(
+            """
+            SELECT a.id_ubicacion
+            FROM actividades a
+            INNER JOIN ubicaciones u
+                ON a.id_ubicacion = u.id_ubicacion
+            WHERE a.id_actividad = %s
+              AND u.id_usuario = %s;
+            """,
+            (id_actividad, id_usuario)
+        )
+
+        actividad = cursor.fetchone()
+
+        if actividad is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Actividad no encontrada"
+            )
+
+        # Bloquear las ubicaciones involucradas durante la edición
+        ubicaciones = sorted({
+            actividad[0],
+            datos.id_ubicacion
+        })
+
+        cursor.execute(
+            """
+            SELECT id_ubicacion
+            FROM ubicaciones
+            WHERE id_usuario = %s
+              AND id_ubicacion = ANY(%s)
+            ORDER BY id_ubicacion
+            FOR UPDATE;
+            """,
+            (id_usuario, ubicaciones)
+        )
+
+        ubicaciones_validas = {
+            fila[0] for fila in cursor.fetchall()
+        }
+
+        if len(ubicaciones_validas) != len(ubicaciones):
+            raise HTTPException(
+                status_code=404,
+                detail="Ubicación no encontrada"
+            )
+
+        # Verificar conflictos excluyendo la actividad actual
+        cursor.execute(
+            """
+            SELECT id_actividad
+            FROM actividades
+            WHERE id_ubicacion = %s
+              AND id_actividad <> %s
+              AND estado = 'pendiente'
+              AND fecha_inicio < %s
+              AND fecha_fin > %s;
+            """,
+            (
+                datos.id_ubicacion,
+                id_actividad,
+                datos.fecha_fin,
+                datos.fecha_inicio
+            )
+        )
+
+        if cursor.fetchone() is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Ya existe otra actividad programada "
+                    "en esta ubicación durante ese horario"
+                )
+            )
+
+        # Actualizar datos generales
+        cursor.execute(
+            """
+            UPDATE actividades
+            SET id_ubicacion = %s,
+                titulo = %s,
+                descripcion = %s,
+                fecha_inicio = %s,
+                fecha_fin = %s,
+                tipo = %s
+            WHERE id_actividad = %s;
+            """,
+            (
+                datos.id_ubicacion,
+                datos.titulo,
+                datos.descripcion,
+                datos.fecha_inicio,
+                datos.fecha_fin,
+                datos.tipo,
+                id_actividad
+            )
+        )
+
+        # Actualizar condiciones climáticas
+        cursor.execute(
+            """
+            INSERT INTO condiciones_actividad
+            (
+                id_actividad,
+                temperatura_min,
+                temperatura_max,
+                lluvia_max,
+                viento_max
+            )
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (id_actividad)
+            DO UPDATE SET
+                temperatura_min = EXCLUDED.temperatura_min,
+                temperatura_max = EXCLUDED.temperatura_max,
+                lluvia_max = EXCLUDED.lluvia_max,
+                viento_max = EXCLUDED.viento_max;
+            """,
+            (
+                id_actividad,
+                datos.temperatura_min,
+                datos.temperatura_max,
+                datos.lluvia_max,
+                datos.viento_max
+            )
+        )
+
+        conexion.commit()
+
+        return {
+            "mensaje": "Actividad actualizada correctamente"
+        }
+
+    except Exception:
+        conexion.rollback()
+        raise
+
+    finally:
+        cursor.close()
+        conexion.close()
+
+# ELIMINAR ACTIVIDAD
+
+@router.delete("/{id_actividad}")
+def eliminar_actividad(
+    id_actividad: int,
+    id_usuario: int = Depends(obtener_id_usuario)
+):
+    conexion = get_connection()
+    cursor = conexion.cursor()
+
+    try:
+        cursor.execute(
+            """
+            DELETE FROM actividades
+            WHERE id_actividad = %s
+              AND id_ubicacion IN (
+                  SELECT id_ubicacion
+                  FROM ubicaciones
+                  WHERE id_usuario = %s
+              )
+            RETURNING id_actividad;
+            """,
+            (id_actividad, id_usuario)
+        )
+
+        resultado = cursor.fetchone()
+
+        if resultado is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Actividad no encontrada"
+            )
+
+        conexion.commit()
+
+        return {
+            "mensaje": "Actividad eliminada correctamente"
+        }
+
+    except Exception:
+        conexion.rollback()
+        raise
+
+    finally:
+        cursor.close()
+        conexion.close()
