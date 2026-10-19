@@ -3,10 +3,10 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field, model_validator
 from psycopg2.extras import RealDictCursor
-
 from database import get_connection
 from routes.ubicaciones import obtener_id_usuario
-
+from datetime import date
+from fastapi import Query
 
 router = APIRouter(
     prefix="/actividades",
@@ -437,6 +437,89 @@ def eliminar_actividad(
     except Exception:
         conexion.rollback()
         raise
+
+    finally:
+        cursor.close()
+        conexion.close()
+# CONSULTAR ACTIVIDADES PENDIENTES
+
+@router.get("/pendientes")
+def listar_actividades_pendientes(
+    fecha: date | None = None,
+    id_ubicacion: int | None = Query(default=None, ge=1),
+    id_usuario: int = Depends(obtener_id_usuario)
+):
+    conexion = get_connection()
+
+    cursor = conexion.cursor(
+        cursor_factory=RealDictCursor
+    )
+
+    try:
+        consulta = """
+            SELECT
+                a.id_actividad,
+                a.id_ubicacion,
+                u.nombre AS ubicacion,
+                u.latitud,
+                u.longitud,
+                a.titulo,
+                a.descripcion,
+                a.fecha_inicio,
+                a.fecha_fin,
+                a.tipo,
+                a.estado,
+                c.temperatura_min,
+                c.temperatura_max,
+                c.lluvia_max,
+                c.viento_max
+
+            FROM actividades a
+
+            INNER JOIN ubicaciones u
+                ON a.id_ubicacion = u.id_ubicacion
+
+            LEFT JOIN condiciones_actividad c
+                ON a.id_actividad = c.id_actividad
+
+            WHERE u.id_usuario = %s
+              AND a.estado = 'pendiente'
+        """
+
+        parametros = [id_usuario]
+
+        # Filtrar por fecha en horario de Guatemala
+        if fecha is not None:
+            consulta += """
+                AND (
+                    a.fecha_inicio
+                    AT TIME ZONE 'America/Guatemala'
+                )::date = %s
+            """
+            parametros.append(fecha)
+
+        # Filtrar por ubicación
+        if id_ubicacion is not None:
+            consulta += """
+                AND a.id_ubicacion = %s
+            """
+            parametros.append(id_ubicacion)
+
+        consulta += """
+            ORDER BY a.fecha_inicio ASC;
+        """
+
+        cursor.execute(consulta, parametros)
+
+        actividades = cursor.fetchall()
+
+        return {
+            "total": len(actividades),
+            "actividades": [
+                dict(actividad)
+                for actividad in actividades
+            ]
+        }
 
     finally:
         cursor.close()
