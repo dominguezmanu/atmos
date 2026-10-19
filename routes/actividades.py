@@ -524,3 +524,57 @@ def listar_actividades_pendientes(
     finally:
         cursor.close()
         conexion.close()
+
+# MARCAR ACTIVIDAD COMO COMPLETADA
+
+@router.patch("/{id_actividad}/completar")
+def completar_actividad(
+    id_actividad: int,
+    id_usuario: int = Depends(obtener_id_usuario)
+):
+    conexion = get_connection()
+    cursor = conexion.cursor()
+
+    try:
+        cursor.execute(
+            """
+            UPDATE actividades
+            SET estado = 'completada'
+            WHERE id_actividad = %s
+              AND estado = 'pendiente'
+              AND id_ubicacion IN (
+                  SELECT id_ubicacion
+                  FROM ubicaciones
+                  WHERE id_usuario = %s
+              )
+            RETURNING id_actividad;
+            """,
+            (id_actividad, id_usuario)
+        )
+
+        resultado = cursor.fetchone()
+
+        if resultado is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "La actividad no existe, no pertenece "
+                    "al usuario o ya fue completada"
+                )
+            )
+
+        conexion.commit()
+
+        return {
+            "mensaje": "Actividad completada correctamente",
+            "id_actividad": id_actividad,
+            "estado": "completada"
+        }
+
+    except Exception:
+        conexion.rollback()
+        raise
+
+    finally:
+        cursor.close()
+        conexion.close()
